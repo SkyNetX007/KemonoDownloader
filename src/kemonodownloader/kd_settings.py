@@ -278,9 +278,7 @@ class SettingsTab(QWidget):
         self.pawchive_policy_info_button.setStyleSheet(
             "background: #4A5B7A; border-radius: 5px;"
         )
-        self.pawchive_policy_info_button.clicked.connect(
-            self.show_pawchive_policy_info
-        )
+        self.pawchive_policy_info_button.clicked.connect(self.show_pawchive_policy_info)
         download_layout.addWidget(self.pawchive_policy_info_button, 0, 3)
 
         self.download_group.setLayout(download_layout)
