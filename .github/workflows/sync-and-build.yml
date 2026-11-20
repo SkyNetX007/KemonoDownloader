@@ -1,0 +1,109 @@
+name: Sync and Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      has_updates: ${{ steps.sync.outputs.has_updates }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git Identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check and Sync with Upstream
+        id: sync
+        env:
+          UPSTREAM_URL: https://github.com/VoxDroid/KemonoDownloader.git
+          BRANCH: main
+        run: |
+          git remote add upstream $UPSTREAM_URL
+          git fetch upstream
+
+          MERGE_BASE=$(git merge-base HEAD upstream/$BRANCH)
+          UPSTREAM_COMMIT=$(git rev-parse upstream/$BRANCH)
+
+          echo "Merge base:     $MERGE_BASE"
+          echo "Upstream commit: $UPSTREAM_COMMIT"
+
+          if [ "$MERGE_BASE" = "$UPSTREAM_COMMIT" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "Already up-to-date. No action needed."
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+          else
+            echo "New commits detected or manual trigger! Forcing sync while preserving workflow..."
+
+            mkdir -p /tmp/backup_workflow
+            if [ -f ".github/workflows/sync-and-build.yml" ]; then
+              cp .github/workflows/sync-and-build.yml /tmp/backup_workflow/
+            fi
+
+            git checkout $BRANCH
+            git reset --hard upstream/$BRANCH
+
+            mkdir -p .github/workflows
+            if [ -f "/tmp/backup_workflow/sync-and-build.yml" ]; then
+              cp /tmp/backup_workflow/sync-and-build.yml .github/workflows/
+            fi
+
+            rm -f .github/workflows/ci.yml
+
+            git add -A .github/workflows/
+            git diff --staged --quiet || git commit -m "chore: preserve custom github action workflow and remove upstream workflow"
+            git push origin $BRANCH --force
+
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+          fi
+
+  build-windows:
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Dependencies & Build App
+        run: |
+          uv venv
+          uv pip install briefcase
+          uv pip install -e . --no-build-isolation
+
+          uv run briefcase create windows --no-input
+          uv run briefcase build windows --no-input
+
+          uv run briefcase package windows --no-input
+          uv run briefcase package windows -p zip --no-input
+
+      - name: Upload Windows MSI Installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: Windows-MSI
+          path: dist/*.msi
+          archive: false
+
+      - name: Upload Windows Portable Zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: Windows-Portable
+          path: dist/*.zip
+          archive: false
